@@ -10,7 +10,7 @@ The application is published to RStudio's shiny server at:
 https://wzhang2020.shinyapps.io/NexrWordPredictrion/ 
 
 The presentation is published at  
-https://rpubs.com/weiweiz/706459
+https://rpubs.com/weiweiz/706467
 
 Data Source:       
 https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip  
