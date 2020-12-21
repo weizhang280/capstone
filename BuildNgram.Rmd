@@ -1,0 +1,176 @@
+---
+title: "Build Ngrams"
+author: "Wei Zhang"
+date: "12/14/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Clean workspace and load required libraries
+```{r message = F, warning = F}
+## release memory + garbage collection
+rm(list = ls(all.names = TRUE))
+invisible(gc())
+
+require(stringr)
+require(tau)
+require(tm)
+require(fst)
+```
+
+## Download and unzip the data files 
+```{r}
+file.path <- "final/en_US/"
+sample.file <- paste0(file.path, "sampleData.txt")
+sample.fst <- paste0(file.path, "sampleData.fst")
+
+if(!file.exists(sample.fst)){
+        url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+        zip.file <- "Coursera-SwiftKey.zip"
+        if(!file.exists(zip.file)){
+                download.file(url, destfile=zipFile, mode = "wb")
+                unzip(zip.file)
+        }
+        
+        
+        file.list <- c("en_US.blogs.txt", "en_US.news.txt", "en_US.twitter.txt")
+        data.source <- list(length(file.list))
+        
+        load <- function(x) {
+                con <- file(paste0(file.path, x), "rb")
+                txt <- readLines(con, encoding = "UTF-8", skipNul = TRUE) 
+                close(con)
+                txt
+        }
+        
+        data.source <- sapply(file.list, load)
+        
+        set.seed(1000)
+        sample.size <- 0.1
+        
+        sampling <- sapply(data.source, function(x) sample(x, length(x) * sample.size, replace = FALSE))
+        sample.all <- unlist(sampling, use.names = FALSE)
+        sample.all <- iconv(sample.all, "latin1", "ASCII", sub = "")
+        
+        con <- file(sample.file, open = "w")
+        writeLines(sample.all, sample.file)
+        close(con)
+        
+        write.fst(as.data.frame(sample.all), sample.fst)
+        
+        rm(data.source, load, sampling, sample.all)
+        invisible(gc())
+}
+```
+
+
+### build/load clean sample data
+```{r}
+clean.sample.file <- paste0(file.path, "cleanSample.txt")
+clean.sample.fst <- paste0(file.path, "cleanSample.fst")
+
+if(!file.exists(clean.sample.file)){
+        con <- file(sample.file, "rb")
+        sample.data <- readLines(sample.file, encoding = "UTF-8", skipNul = TRUE, warn = FALSE)
+        close(con)
+        
+        ### sample data cleaning
+        badwords.file <- "list.txt"
+        profanity <- readLines(paste0(file.path, badwords.file), encoding = "UTF-8", skipNul = TRUE)
+        profanity <- iconv(profanity, "latin1", "ASCII", sub = "")
+        
+        cleanText <- function(text) {
+                # Set the text to lowercase
+                text <- tolower(text)
+                # Remove mentions, urls, emojis, hashtags, numbers
+                text <- gsub("@\\w+", " ", text)
+                text <- gsub("https?://.+", " ", text)
+                text <- gsub("\\d+\\w*\\d*", " ", text)
+                text <- gsub("#\\w+", " ", text)
+                text <- gsub("[^\x01-\x7F]", " ", text)
+                # remove profane words
+                text <- removeWords(text, profanity)
+                # remove punctuations except apostrophes
+                text <- gsub("[^'[:^punct:]]", " ", text, perl=T)
+                # remove newlines
+                text <- gsub("\n", " ", text)
+                # remove leading and trailing whitespace
+                text <- gsub("^\\s+|\\s+$", "", text)
+                # remove extra space
+                text <- stripWhitespace(text)
+                text
+        }
+        
+        sample.data <- cleanText(sample.data)
+
+        # write sample data set to disk
+        con <- file(clean.sample.file, open = "w")
+        writeLines(sample.data, con)
+        close(con)
+        
+        write.fst(as.data.frame(sample.data), clean.sample.fst)
+
+        rm(con, cleanText, profanity, badwords.file, sample.data)
+        invisible(gc())
+} 
+        
+#load clean sample data      
+clean.sample.data <- read.fst(clean.sample.fst)
+        
+```
+
+
+### Functions to build ngram frequency and FST files
+```{r}
+
+getNgramFreq <- function(ngram){
+        freq <- textcnt(clean.sample.data, method="string", n=ngram, split = "[[:space:]]+", decreasing=TRUE, lower = 0L)
+        freq.df <- data.frame(word = names(freq), count = c(freq), row.names = NULL)
+        
+        ## release memory + garbage collection
+        rm(freq)
+        invisible(gc())
+        
+        if(ngram == 2) {
+            freq.df$previous1 <- word(freq.df$word, 1)    
+        } else if (ngram == 3) {
+            freq.df$previous2 <- word(freq.df$word, 1,2)   
+        } else if (ngram == 4) {
+            freq.df$previous3 <- word(freq.df$word, 1,3)    
+        }
+        return(freq.df)
+}
+
+createFST <- function(fstFile, ngram) {
+        if(!file.exists(fstFile)){
+                df <- getNgramFreq(ngram)
+                write.fst(df, fstFile)
+                
+                ## release memory + garbage collection
+                rm(df)
+                invisible(gc())
+        }      
+}
+
+```
+
+### generate frequency fst file
+```{r}
+fstFile <- paste0(file.path, "1gram.fst")
+createFST(fstFile, 1)
+
+fstFile <- paste0(file.path, "2gram.fst")
+createFST(fstFile, 2)
+
+fstFile <- paste0(file.path, "3gram.fst")
+createFST(fstFile, 3)
+
+fstFile <- paste0(file.path, "4gram.fst")
+createFST(fstFile, 4)
+
+```
+
+
