@@ -1,0 +1,287 @@
+---
+title: "Capstone-Week2-Project"
+author: "Wei Zhang"
+date: "11/19/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE, message = F, warning = F}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Summary
+The purpose of this project:
+
+1. Demonstrate data downloading, cleaning and corpus building.
+2. Create a basic report of summary statistics about the data sets.
+3. Data exploration by Ngram Tokenization
+4. Plan for creating a prediction algorithm and Shiny app
+
+## Clean workspace and load required libraries
+```{r message = F, warning = F}
+## release memory + garbage collection
+rm(list = ls(all.names = TRUE))
+invisible(gc())
+
+## load libraries
+library(stringr)
+library(corpus)
+library(tm)
+library(SnowballC)
+library(RWeka)
+library(ggplot2)
+```
+## Data Source
+The text data files come from 3 public sources in English language:
+
+1. blogs
+2. news
+3. twitter
+
+## Download and unzip the data files 
+```{r}
+url <- "https://d396qusza40orc.cloudfront.net/dsscapstone/dataset/Coursera-SwiftKey.zip"
+zip.file <- "Coursera-SwiftKey.zip"
+if(!file.exists(zip.file)){
+        download.file(url, destfile=zipFile, mode = "wb")
+        unzip(zip.file)
+}
+```
+
+## Load Data
+```{r}
+file.path <- "final/en_US/"
+file.list <- c("en_US.blogs.txt", "en_US.news.txt", "en_US.twitter.txt")
+data.source <- list(length(file.list))
+
+load <- function(x) {
+        con <- file(paste0(file.path, x), "rb")
+        txt <- readLines(con, encoding = "UTF-8", skipNul = TRUE) 
+        close(con)
+        txt
+}
+
+data.source <- sapply(file.list, load)
+```
+## Basic data summary  
+From the summary table below, we can see the twitter data file has the biggest number of lines but the least average words per line. Blogs has the least number of lines but the biggest average number of words per line. News stands in the middle. Another observation is the total size of the 3 text sources in memory. The limited power of my local machine would necessitate the appropriate sampling, memory release and garbage colleciton during corpus building and data exploration.
+
+```{r}
+size.MB_in_memory <- sapply(data.source, function(x) round(object.size(x) / 1024 ^ 2, digits = 2))
+line.count <- sapply(data.source, length)
+word.per.line <-lapply(data.source, function(x) str_count(unlist(x), "\\S+"))
+word.count <- sapply(word.per.line, function(x) sum(x, na.rm = TRUE))
+avg.word_per_line <- round(word.count/line.count, digits = 0)
+tbl <- cbind(size.MB_in_memory, line.count, word.count, avg.word_per_line)
+rbind(tbl, total=colSums(tbl))
+
+## release memory + garbage collection
+rm(url, zip.file, load, size.MB_in_memory, line.count, word.count, tbl)
+invisible(gc())
+```
+
+Histogram of number of Words per line
+- 
+```{r, message = F, warning = F}
+qplot(word.per.line[[1]], geom="histogram",main="US Blogs",
+      xlab="No. of Words",ylab="Frequency",binwidth=10, xlim=c(0,500))                                        
+```
+- 
+```{r, message = F, warning = F}
+qplot(word.per.line[[2]], geom="histogram",main="US News",
+      xlab="No. of Words",ylab="Frequency",binwidth=10, xlim=c(0,500))
+```
+- 
+```{r, message = F, warning = F}
+qplot(word.per.line[[3]], geom="histogram",main="US Twitters",
+      xlab="No. of Words",ylab="Frequency",binwidth=10, xlim=c(0,500))
+
+rm(word.per.line)
+invisible(gc())
+```
+
+## Data Sampling
+
+1. Due to the limited power of my laptop, the sample size chosen is the max allowed by the local ram.
+```{r}
+set.seed(10000)
+sample.size <- 0.01
+```
+
+2. sample 3 data sources and combine into one vector
+```{r}
+sample.data <- sapply(data.source, function(x) sample(x, length(x) * sample.size, replace = FALSE))
+sample.all <- unlist(sample.data, use.names = FALSE)
+
+## release memory + garbage collection
+rm(data.source, sample.data)
+invisible(gc())
+```
+
+3. Remove all non-English characters
+```{r}
+sample.all <- iconv(sample.all, "latin1", "ASCII", sub = "")
+```
+
+4. The sampled data summary
+```{r}
+c("size.MB_in_memory" = round(object.size(sample.all) / 1024 ^ 2, digits = 0),
+  "line.count"  = length(sample.all),
+  "word.count" = sum(str_count(sample.all, "\\S+")))
+```
+
+5. write to disk
+```{r}
+writeLines(sample.all, paste0(file.path, "sampleData.txt"))
+```
+
+## Build Corpus from the sampled data
+After loading the sampled data into a corpus, we will transform its text into workable data by convertint to lowercase, removing email address, twitter handler, hashtag, url, stopwords, badwords, punctuation, number, extra white space,and stemming. We will also write corpus text data to disc.  
+
+1. build profanity vector
+```{r}
+badWords.url <- "https://raw.githubusercontent.com/RobertJGabriel/Google-profanity-words/master/list.txt"
+badWords.file <- paste0(file.path, "list.txt")
+if (!file.exists(badWords.file)) {
+        download.file(badWords.url, destfile=badWords.file, mode = "wb") 
+}
+profanity <- readLines(badWords.file, encoding = "UTF-8", skipNul = TRUE)
+profanity <- iconv(profanity, "latin1", "ASCII", sub = "")
+
+```
+
+2. build corpus and transform its text into workable data
+
+```{r}
+## The tm package provides a function tm_map() to apply cleaning functions to an entire corpus
+toSpace <- content_transformer(function (x , pattern ) gsub(pattern, " ", x))
+
+## load samepled data into a corpus
+corpus <- VCorpus(VectorSource(sample.all))
+
+## release memory + garbage collection
+rm(sample.all)
+invisible(gc())
+
+## remove email address
+corpus <- tm_map(corpus, toSpace, "^[[:alnum:]._-]+@[[:alnum:].-]+$")
+## remove twitter handles
+corpus <- tm_map(corpus, toSpace, "@\\S+")
+## remove hashtags
+corpus <- tm_map(corpus, toSpace, "#\\S+")
+## convert all text to lower case
+corpus <- tm_map(corpus, content_transformer(tolower))
+## remove URL
+corpus <- tm_map(corpus, toSpace, "(f|ht)tp(s?):(\\s*?)//(.*)[.][a-z]+(/?)")
+## remove english common stopwords
+corpus <- tm_map(corpus, removeWords, stopwords("english"))
+## profanity filtering
+corpus <- tm_map(corpus, removeWords, profanity)
+## remove punctuations
+corpus <- tm_map(corpus, removePunctuation)
+## remove numbers
+corpus <- tm_map(corpus, removeNumbers)
+## Strip extra whitespace
+corpus <- tm_map(corpus, stripWhitespace)
+## text stemming
+corpus <- tm_map(corpus, stemDocument)
+
+## write corpus to disc as a serialized R object in RDS format
+saveRDS(corpus, file = paste0(file.path, "en_US.corpus.rds"))
+
+## write corpus to disc as a text file
+corpusText <- data.frame(text = unlist(sapply(corpus, '[', "content")), stringsAsFactors = FALSE)
+con <- file(paste0(file.path, "en_US.corpus.txt"), open = "w")
+writeLines(corpusText$text, con)
+close(con)
+
+## release memory + garbage collection
+rm(badWords.url, badWords.file, profanity, toSpace, corpusText, con)
+invisible(gc())
+
+```
+
+## Data Exaploration and the plan for predictive model
+The final goal of this course is to develop a predictive text mining application. Before we start the basic n-gram models and discover more complicated modeling techniques for the relationship between words, let's do some basic data exploration with Ngram tokenization. 
+
+1. Unigram
+```{r}
+## build single word freqency dataframe
+UnigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 1, max = 1))
+unigram <- TermDocumentMatrix(corpus, control = list(tokenize = UnigramTokenizer))
+sorted.freq <- sort(rowSums(as.matrix(removeSparseTerms(unigram, 0.99))), decreasing = TRUE)
+word.freq <- data.frame(word = names(sorted.freq), numword = sorted.freq) 
+
+saveRDS(word.freq, paste0(file.path, "unigram.RData"))
+
+## release memory + garbage collection
+rm(UnigramTokenizer, unigram, sorted.freq)
+invisible(gc())
+
+## plot top 10 single words
+ggp <- ggplot(word.freq[1:10,], aes(x = reorder(word, -numword), y = numword)) +
+  geom_bar(stat = "identity", fill = "cornflowerblue") +
+  ggtitle("Top 10 Frequently Used Unigrams") +
+  labs(x="unigram", y="frequency") + 
+  geom_text(aes(label = numword), vjust = -0.4) +
+  theme(plot.title = element_text(size = 14, hjust = 0.5, vjust = 0.5),
+        axis.text.x = element_text(hjust = 0.5, vjust = 0.5, angle = 45),
+        axis.text.y = element_text(hjust = 0.5, vjust = 0.5))
+print(ggp)
+```
+
+2. Bigram
+```{r}
+## build bigram freqency data frame
+BigramTokenizer <- function(x)NGramTokenizer(x, Weka_control(min = 2, max = 2))
+bigram <- TermDocumentMatrix(corpus, control = list(tokenize = BigramTokenizer))
+sorted.freq <- sort(rowSums(as.matrix(removeSparseTerms(bigram, 0.999))), decreasing = TRUE)
+## take top 10 from the dataframe for plotting
+word.freq <- data.frame(word = names(sorted.freq), numword = sorted.freq)
+
+saveRDS(word.freq, paste0(file.path, "bigram.RData"))
+
+## release memory + garbage collection
+rm(BigramTokenizer, bigram, sorted.freq)
+invisible(gc())
+
+# plot top 10 bigrams
+ggp <- ggplot(word.freq[1:10,], aes(x = reorder(word, -numword), y = numword)) +
+  geom_bar(stat = "identity", fill = "cornflowerblue") +
+  ggtitle("Top 10 Frequently Used Bigrams") +
+  labs(x="bigram", y="frequency") + 
+  geom_text(aes(label = numword), vjust = -0.4) +
+  theme(plot.title = element_text(size = 14, hjust = 0.5, vjust = 0.5),
+        axis.text.x = element_text(hjust = 0.5, vjust = 0.5, angle = 45),
+        axis.text.y = element_text(hjust = 0.5, vjust = 0.5))
+print(ggp)
+
+```
+
+3. Trigram
+```{r}
+## build trigram freqency data frame
+TrigramTokenizer <- function(x) NGramTokenizer(x, Weka_control(min = 3, max = 3))
+trigram <- TermDocumentMatrix(corpus, control = list(tokenize = TrigramTokenizer))
+sorted.freq <- sort(rowSums(as.matrix(removeSparseTerms(trigram, 0.9999))), decreasing = TRUE)
+## take top 10 from the dataframe for plotting
+word.freq <- data.frame(word = names(sorted.freq), numword = sorted.freq)
+
+saveRDS(word.freq, paste0(file.path, "trigram.RData"))
+
+## release memory + garbage collection
+rm(TrigramTokenizer, trigram, sorted.freq)
+invisible(gc())
+
+# plot top 10 trigrams
+ggp <- ggplot(word.freq[1:10,], aes(x = reorder(word, -numword), y = numword)) +
+  geom_bar(stat = "identity", fill = "cornflowerblue") +
+  ggtitle("Top 10 Frequently Used Trigrams") +
+  labs(x="trigram", y="frequency") + 
+  geom_text(aes(label = numword), vjust = -0.4) +
+  theme(plot.title = element_text(size = 14, hjust = 0.5, vjust = 0.5),
+        axis.text.x = element_text(hjust = 0.5, vjust = 0.5, angle = 45),
+        axis.text.y = element_text(hjust = 0.5, vjust = 0.5))
+print(ggp)
+
+```
